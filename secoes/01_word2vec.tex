@@ -1,0 +1,542 @@
+%========================================================================================
+%  Seção 15.1 do D2L -- Word Embedding (word2vec)
+%  https://d2l.ai/chapter_natural-language-processing-pretraining/word2vec.html
+%========================================================================================
+
+%------------------------------------------------
+\section{Motivação: como representar palavras?}
+%------------------------------------------------
+
+\begin{frame}{Por que estudar Processamento de Linguagem Natural?}
+    \begin{center}
+        {\large\color{dexpiBlue}\textbf{Grande parte dos dados do mundo está em forma de texto.}}
+    \end{center}
+
+    \begin{columns}[c]
+        \begin{column}{0.52\textwidth}
+            \begin{itemize}
+                \item Pessoas se comunicam por \destaque{linguagem natural}: e-mails, redes sociais, avaliações, notícias.
+                \item Esse texto é \destaque{não estruturado}: o computador não o analisa diretamente.
+                \item O \textbf{PLN} \destaque{processa a linguagem natural} para \destaque{obter dados} e \destaque{fazer análises}.
+                \item Aplicações (D2L): análise de sentimento, inferência, resposta a perguntas, tradução.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.44\textwidth}
+            \centering
+            \begin{tikzpicture}[
+                box/.style={draw=dexpiBlue, fill=dexpiBlueLight, rounded corners=2pt, minimum width=3.6cm, minimum height=0.7cm, align=center, font=\small},
+                arr/.style={-{Stealth}, thick, dexpiBlue}]
+                \node[box] (t) {Texto\\{\scriptsize ``I loved this movie!''}};
+                \node[box, below=0.35cm of t, fill=dexpiLightBlue, very thick] (p) {\textbf{PLN}\\{\scriptsize processar a linguagem}};
+                \node[box, below=0.35cm of p] (d) {Dados estruturados\\{\scriptsize números, rótulos, vetores}};
+                \node[box, below=0.35cm of d] (a) {Análises\\{\scriptsize ex.: sentimento = positivo}};
+                \draw[arr] (t) -- (p);
+                \draw[arr] (p) -- (d);
+                \draw[arr] (d) -- (a);
+            \end{tikzpicture}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Resumo: do word2vec ao BERT}
+    \centering
+    \begin{tikzpicture}[font=\scriptsize,
+        m/.style={fill=white, rounded corners=2pt, align=center, minimum width=1.75cm, minimum height=0.8cm, inner sep=2pt},
+        s/.style={-{Stealth}, thick, gray}]
+        \node[m, draw=dexpiRedDark] (w) at (0,0) {\textbf{word2vec}\\{\tiny 2013}};
+        \node[m, draw=dexpiRedDark] (g) at (2.2,0) {\textbf{GloVe}\\{\tiny 2014}};
+        \node[m, draw=dexpiRedDark] (f) at (4.4,0) {\textbf{fastText}\\{\tiny 2017}};
+        \node[m, draw=dexpiGreenDark] (e) at (6.6,0) {\textbf{ELMo}\\{\tiny 2018}};
+        \node[m, draw=dexpiGreenDark] (p) at (8.8,0) {\textbf{GPT}\\{\tiny 2018}};
+        \node[m, draw=dexpiBlue, fill=dexpiBlueLight, very thick] (b) at (11.0,0) {\textbf{BERT}\\{\tiny 2018}};
+        \foreach \a/\c in {w/g, g/f, f/e, e/p, p/b} \draw[s] (\a) -- (\c);
+        \draw[decorate, decoration={brace, mirror, amplitude=5pt}, dexpiRedDark] (-0.85,-0.55) -- (5.25,-0.55) node[midway, below=6pt, text=dexpiRedDark] {um vetor fixo por palavra};
+        \draw[decorate, decoration={brace, mirror, amplitude=5pt}, dexpiGreenDark] (5.75,-0.55) -- (11.85,-0.55) node[midway, below=6pt, text=dexpiGreenDark] {um vetor por palavra \textbf{em cada contexto}};
+    \end{tikzpicture}
+
+    \vspace{0.3cm}
+    \raggedright
+    \footnotesize
+    \begin{itemize}
+        \item \textbf{2013--2017}: word2vec, GloVe e fastText aprendem o significado de uma palavra a partir das palavras que aparecem \textbf{perto} dela.
+        \item \textbf{Limite}: o vetor é o mesmo em qualquer frase.
+        \item \textbf{2018}: ELMo, GPT e BERT geram o vetor \textbf{a partir do contexto}.
+        \item \textbf{Hoje vamos ver}: como treinar o word2vec, o GloVe e o fastText, e como o BERT chega ao vetor contextual.
+    \end{itemize}
+
+    \note{
+        Antes de entrar nos detalhes, vamos olhar o caminho todo, que é o roteiro da apresentação.
+        Começamos com o word2vec, em 2013, passamos pelo GloVe, em 2014, e pelo fastText, em 2017. Esses três dão um vetor fixo por palavra, o mesmo em qualquer frase.
+        Em 2018 veio a virada: ELMo, GPT e BERT, que dão um vetor diferente para cada palavra em cada contexto.
+        A ideia que atravessa tudo, desde o word2vec, é a mesma: aprender o significado de uma palavra a partir das palavras que aparecem perto dela. O que muda é que, a partir de 2018, o vetor passa a depender da frase.
+        Hoje vamos ver como treinar o word2vec, o GloVe e o fastText, e depois como o BERT chega ao vetor contextual.
+    }
+\end{frame}
+
+\begin{frame}{Introdução: representação de palavras por vetores}
+    \begin{center}
+        {\normalsize\color{dexpiBlue}\textbf{Se um computador só entende números como ele vai entender palavras?}}
+    \end{center}
+
+    \begin{columns}[c]
+        \begin{column}{0.42\textwidth}
+            \small
+            \begin{itemize}
+                \item \destaque{Cada palavra vira um endereço:} uma lista de números reais (\textbf{word embedding}).
+                \item \destaque{Perto = parecido:} palavras de significado semelhante ficam vizinhas no mapa.
+                \item O modelo lê essas coordenadas como \textit{features} de entrada.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.54\textwidth}
+            \centering
+            \begin{tikzpicture}[scale=0.72, transform shape, font=\scriptsize, dot/.style={circle, inner sep=1.6pt}]
+                \draw[-{Stealth}, gray] (0,0) -- (5.2,0) node[below left] {dimensão 1};
+                \draw[-{Stealth}, gray] (0,0) -- (0,2.7) node[right] {dimensão 2};
+                \draw[dexpiGreenDark, dashed, rounded corners, fill=dexpiGreenDark!10] (0.3,1.3) rectangle (2.5,2.5);
+                \node[dexpiGreenDark, anchor=north west, font=\scriptsize\bfseries] at (0.35,2.5) {Pessoas};
+                \draw[dexpiRedDark, dashed, rounded corners, fill=dexpiRedDark!10] (2.8,0.2) rectangle (5.0,1.4);
+                \node[dexpiRedDark, anchor=north west, font=\scriptsize\bfseries] at (2.85,1.4) {Ações (verbos)};
+                \node[dot, fill=dexpiGreenDark] (man) at (1.0,1.8) {}; \node[right] at (man) {man};
+                \node[dot, fill=dexpiGreenDark] (son) at (1.5,1.5) {}; \node[right] at (son) {son};
+                \node[dot, fill=dexpiRedDark] (loves) at (3.6,0.55) {}; \node[below] at (loves) {loves};
+                \node[dot, fill=dexpiRedDark] (likes) at (4.3,0.85) {}; \node[right] at (likes) {likes};
+                \draw[gray, dotted, thick] (1.6,1.35) -- (3.5,0.7) node[midway, above, sloped] {longe};
+                \node[gray, anchor=south east] at (5.2,2.6) {$\mathbb{R}^d$};
+            \end{tikzpicture}
+        \end{column}
+    \end{columns}
+
+    \vspace{-0.15cm}
+    \centering
+    \begin{tikzpicture}[
+        box/.style={draw=dexpiBlue, fill=dexpiBlueLight, rounded corners=2pt, minimum height=0.6cm, align=center, font=\footnotesize},
+        arr/.style={-{Stealth}, thick, dexpiBlue}]
+        \node[box] (t) {Texto\\{\scriptsize ``the man loves his son''}};
+        \node[box, right=0.35cm of t] (k) {Tokens\\{\scriptsize the | man | loves | \ldots}};
+        \node[box, right=0.35cm of k] (i) {Índices\\{\scriptsize 0, 1, 2, 3, 4}};
+        \node[box, right=0.35cm of i, fill=dexpiLightBlue, very thick] (v) {\textbf{Vetores}\\{\scriptsize $\xx_0, \xx_1, \ldots \in \mathbb{R}^d$}};
+        \node[box, right=0.35cm of v] (m) {Modelo\\{\scriptsize RNN, Transformer\ldots}};
+        \draw[arr] (t) -- (k);
+        \draw[arr] (k) -- (i);
+        \draw[arr] (i) -- (v);
+        \draw[arr] (v) -- (m);
+        \draw[dexpiBlue, dashed, thick, -{Stealth}] (v.north) -- ++(0,0.3) node[above, font=\scriptsize, text=dexpiBlue, fill=white, inner sep=1pt] {aqui as palavras ganham posição no mapa};
+        \node[below=0.15cm of v, font=\scriptsize, text=dexpiRedDark] {\textbf{Tema de hoje}};
+    \end{tikzpicture}
+\end{frame}
+
+\begin{frame}{One-hot: simples, mas toda palavra é ortogonal}
+    \begin{columns}[c]
+        \begin{column}{0.58\textwidth}
+            \footnotesize
+            \begin{itemize}
+                \item Dicionário com $N = |\V|$ palavras: a de índice $i$ vira um vetor de dimensão $N$ com \textbf{1} na posição $i$ e \textbf{0} no resto.
+                \item Semelhança: \destaque{cosseno}
+                $\cos(\theta) = \dfrac{\xx^\top \yy}{\|\xx\|\,\|\yy\|} \in [-1, 1]$.
+                \item Dois one-hot \textbf{diferentes}: $\xx^\top\yy = 0 \Rightarrow \cos(\theta) = 0$. \textit{``man''} é tão parecido com \textit{``son''} quanto com \textit{``the''}.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.38\textwidth}
+            \centering
+            \begin{tikzpicture}[font=\scriptsize]
+                \matrix (M) [matrix of math nodes, nodes={minimum width=0.5cm, minimum height=0.4cm, anchor=center},
+                    left delimiter={[}, right delimiter={]}, row sep=1pt, column sep=1pt, ampersand replacement=\&] {
+                    1 \& 0 \& 0 \& 0 \& 0 \\
+                    0 \& 1 \& 0 \& 0 \& 0 \\
+                    0 \& 0 \& 1 \& 0 \& 0 \\
+                    0 \& 0 \& 0 \& 1 \& 0 \\
+                    0 \& 0 \& 0 \& 0 \& 1 \\
+                };
+                \foreach \w [count=\r] in {the, man, loves, his, son} {
+                    \node[anchor=east, text=dexpiBlue] at ($(M-\r-1.west)+(-0.35,0)$) {\textbf{\w}};
+                }
+                \foreach \c in {1,...,5} {
+                    \fill[dexpiLightBlue, opacity=0.6] ($(M-\c-\c.north west)+(0.05,-0.02)$) rectangle ($(M-\c-\c.south east)+(-0.05,0.02)$);
+                }
+            \end{tikzpicture}
+
+            {\tiny $N = 5$: $\V = \{\text{the}, \text{man}, \text{loves}, \text{his}, \text{son}\}$}
+        \end{column}
+    \end{columns}
+    \vspace{0.1cm}
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \begin{alertblock}{Problemas}
+                \scriptsize
+                Não codifica \textbf{semelhança} semântica. Dimensão $N$ enorme ($10^5$--$10^6$) e vetores esparsos.
+            \end{alertblock}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{exampleblock}{O que queremos}
+                \scriptsize
+                Vetores \textbf{densos} de dimensão $d \ll N$ (ex.: $d = 100$--$300$), com palavras parecidas $\Rightarrow$ vetores próximos.
+            \end{exampleblock}
+        \end{column}
+    \end{columns}
+
+    \note{
+        A primeira tentativa de representar palavras é o vetor one-hot. Temos um dicionário com N palavras, e a palavra de índice i vira um vetor de dimensão N com 1 na posição i e 0 no resto. É simples e não exige treinamento.
+        Mas ele é uma péssima escolha. Uma forma natural de medir semelhança entre vetores é a similaridade do cosseno. Para dois vetores one-hot de palavras diferentes, o produto escalar é zero, então o cosseno é zero. Ou seja, ``man'' é tão parecido com ``son'' quanto com ``the'': toda palavra é ortogonal a toda outra.
+        Além disso, a dimensão é enorme, de cem mil a um milhão, e os vetores são esparsos. O que queremos são vetores densos, de dimensão bem menor, em que palavras parecidas ficam com vetores próximos.
+    }
+\end{frame}
+
+
+\begin{frame}{Embedding: um dicionário de números}
+    \begin{columns}[T]
+        \begin{column}{0.5\textwidth}
+            \small
+            \begin{itemize}
+                \item Pense num \destaque{dicionário}: você procura a palavra e recebe uma lista de números.
+                \item Esse dicionário é uma tabela $\mathbf{W}$, com \textbf{uma linha por palavra}.
+            \end{itemize}
+
+            \begin{tikzpicture}
+                \node[draw=dexpiBlue, fill=dexpiBlueLight, rounded corners=3pt, thick, inner sep=4pt, align=center] {
+                    $\mathbf{e}_i^\top \mathbf{W} = \mathbf{W}_{i,:}$\\[1pt]
+                    {\scriptsize multiplicar pelo one-hot $=$ \destaque{selecionar a linha da palavra}}};
+            \end{tikzpicture}
+
+            \vspace{0.3cm}
+            \begin{tikzpicture}[baseline=-0.6ex]
+                \foreach \a in {0,45,...,315} {
+                    \fill[dexpiRedDark, rotate=\a] (-0.05,0.1) rectangle (0.05,0.18);
+                }
+                \fill[dexpiRedDark] (0,0) circle (0.13);
+                \fill[white] (0,0) circle (0.05);
+            \end{tikzpicture}
+            {\footnotesize Os números são \textbf{\color{dexpiRedDark}APRENDIDOS}, não escolhidos por nós.}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \centering
+            \begin{tikzpicture}
+                \node[font=\small\bfseries, text=dexpiBlue] at (3.1,5.05) {O mapa do significado};
+                \matrix (W) [matrix of nodes, ampersand replacement=\&, font=\scriptsize,
+                    nodes={minimum height=0.34cm, anchor=center}, column sep=2pt,
+                    column 1/.style={nodes={minimum width=1.0cm}},
+                    column 2/.style={nodes={minimum width=0.75cm}},
+                    column 3/.style={nodes={minimum width=0.75cm}}, row 2/.style={nodes={fill=dexpiGreenLight}}] at (3.1,3.95) {
+                    rei \& 1.2 \& 1.5 \\
+                    gato \& $-1.0$ \& 1.5 \\
+                    correr \& $-0.6$ \& $-1.2$ \\
+                };
+                \draw[dexpiBlue] (W.north west) rectangle (W.south east);
+                \draw[dexpiBlue] (W-1-1.north east) -- (W-3-1.south east);
+                \node[font=\small, text=dexpiBlue, anchor=west] at ($(W.east)+(0.05,0)$) {$\mathbf{W}$};
+                \begin{axis}[
+                    at={(0,0)}, anchor=south west,
+                    width=6.8cm, height=3.5cm, clip=false,
+                    xmin=-2.4, xmax=2.6, ymin=-2.1, ymax=2.2,
+                    axis lines=middle, ticks=none,
+                    xlabel={\scriptsize dim 1}, ylabel={\scriptsize dim 2}]
+                    \coordinate (gatoPt) at (axis cs:-1.0,1.5);
+                    \addplot[only marks, mark=*, dexpiBlue] coordinates {(1.2,1.5) (1.6,1.1) (0.9,1.0)};
+                    \node[font=\scriptsize, anchor=south] at (axis cs:1.2,1.5) {rei};
+                    \node[font=\scriptsize, anchor=west] at (axis cs:1.6,1.1) {rainha};
+                    \node[font=\scriptsize, anchor=east] at (axis cs:0.9,1.0) {príncipe};
+                    \addplot[only marks, mark=square*, dexpiGreenDark] coordinates {(-1.4,1.2) (-1.0,1.5) (-1.6,0.8)};
+                    \node[font=\scriptsize, anchor=south] at (axis cs:-1.0,1.5) {gato};
+                    \node[font=\scriptsize, anchor=east] at (axis cs:-1.4,1.2) {cão};
+                    \node[font=\scriptsize, anchor=north] at (axis cs:-1.6,0.8) {lobo};
+                    \addplot[only marks, mark=triangle*, dexpiRed] coordinates {(-0.6,-1.2) (-1.1,-1.5) (-0.4,-1.6)};
+                    \node[font=\scriptsize, anchor=south] at (axis cs:-0.6,-1.2) {correr};
+                    \node[font=\scriptsize, anchor=east] at (axis cs:-1.1,-1.5) {andar};
+                    \node[font=\scriptsize, anchor=west] at (axis cs:-0.4,-1.6) {pular};
+                \end{axis}
+                \draw[-{Stealth}, thick, dexpiGreenDark] (W-2-1.west) to[out=180, in=90] ($(gatoPt)+(0,0.4)$);
+            \end{tikzpicture}\par
+            {\scriptsize Cada linha de $\mathbf{W}$ é um ponto ($d=2$, ilustrativo).\\
+            Significados parecidos $\Rightarrow$ \destaque{pontos próximos}.}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+%------------------------------------------------
+\section{word2vec: aprendizado auto-supervisionado}
+%------------------------------------------------
+
+\begin{frame}{word2vec \cite{mikolov2013efficient, mikolov2013distributed}}
+    \begin{itemize}
+        \item Proposto por Mikolov et al. (Google, 2013).
+        \item Mapeia cada palavra para um vetor de \destaque{tamanho fixo} que expressa melhor \textbf{similaridade} e \textbf{analogia}.
+        \item Dois modelos:
+        \begin{itemize}
+            \item \textbf{Skip-gram}: dada a palavra central, prevê as palavras do contexto.
+            \item \textbf{CBOW} (\textit{Continuous Bag of Words}): dado o contexto, prevê a palavra central.
+        \end{itemize}
+    \end{itemize}
+
+    \begin{block}{Por que \textit{auto-supervisionado}?}
+        Não há rótulos humanos. Os ``rótulos'' (palavras vizinhas) saem do \textbf{próprio texto}. Qualquer corpus grande (Wikipédia, notícias, livros) vira dado de treino.
+    \end{block}
+\end{frame}
+
+\begin{frame}{Janela de contexto: de onde vêm os dados de treino}
+    \small
+    \begin{itemize}
+        \item Uma \destaque{palavra central} $w_c$ e um \destaque{tamanho de janela} $m$: as palavras a até $m$ posições formam o \destaque{contexto}. Deslizando o centro por $t = 1, \ldots, T$, temos milhões de exemplos de texto bruto.
+    \end{itemize}
+    \vspace{0.05cm}
+    \centering
+    \begin{tikzpicture}[scale=0.8, transform shape,
+        w/.style={draw=dexpiBlue, rounded corners=2pt, minimum width=1.5cm, minimum height=0.6cm, font=\small},
+        ctx/.style={w, fill=dexpiGreenLight, draw=dexpiGreenDark},
+        cen/.style={w, fill=dexpiBlue, text=white, font=\small\bfseries}]
+        \node[ctx] (a) at (0,0) {the};
+        \node[ctx] (b) at (1.9,0) {man};
+        \node[cen] (c) at (3.8,0) {loves};
+        \node[ctx] (d) at (5.7,0) {his};
+        \node[ctx] (e) at (7.6,0) {son};
+        \draw[decorate, decoration={brace, amplitude=4pt, mirror}, thick, dexpiGreenDark]
+            ($(a.south west)+(0,-0.1)$) -- ($(b.south east)+(0,-0.1)$) node[midway, below=5pt, font=\scriptsize] {$m=2$ à esquerda};
+        \draw[decorate, decoration={brace, amplitude=4pt, mirror}, thick, dexpiGreenDark]
+            ($(d.south west)+(0,-0.1)$) -- ($(e.south east)+(0,-0.1)$) node[midway, below=5pt, font=\scriptsize] {$m=2$ à direita};
+        \node[above=0.05cm of c, font=\scriptsize, text=dexpiBlue] {centro $w^{(t)}$};
+    \end{tikzpicture}
+
+    \vspace{0.05cm}
+    \raggedright
+    \scriptsize
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \textbf{\color{dexpiBlue}Skip-gram: adivinhar os vizinhos.} ``Se eu digo \textit{futebol}, o que aparece por perto?'' Cada vizinho é uma \destaque{pergunta separada}: 4 vizinhos $=$ 4 exemplos, (loves $\to$ the), (loves $\to$ man), (loves $\to$ his), (loves $\to$ son).
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \textbf{\color{dexpiBlue}CBOW: completar a lacuna.} O exercício ``complete a frase''. Os vizinhos entram juntos, como um \destaque{saco de palavras} (a ordem não importa): (\{the, man, his, son\} $\to$ loves).
+        \end{column}
+    \end{columns}
+    \begin{exampleblock}{Intuição (vale para os dois)}
+        \scriptsize
+        Para acertar, o modelo aprende quais palavras combinam com quais contextos: palavras com os \textbf{mesmos vizinhos} ficam com \textbf{vetores parecidos}.
+    \end{exampleblock}
+
+    \note{
+        Vamos ver de onde vêm os dados de treino. Escolhemos uma palavra central e um tamanho de janela $m$. As palavras a até $m$ posições de distância formam o contexto. No exemplo, com $m = 2$ e a palavra central ``loves'', o contexto é ``the'', ``man'', ``his'' e ``son''. Deslizando o centro pelo texto, obtemos milhões de exemplos a partir de texto bruto.
+        No skip-gram, o modelo recebe o centro e adivinha os vizinhos. É como perguntar: se eu digo futebol, o que aparece por perto? Cada vizinho vira uma pergunta separada, então quatro vizinhos dão quatro exemplos de treino.
+        No CBOW, o modelo recebe o contexto e completa a lacuna, como o exercício de escola. Os vizinhos entram juntos, como um saco de palavras, e a ordem não importa.
+        Para os dois, a intuição é a mesma: para acertar, o modelo precisa aprender quais palavras combinam com quais contextos, e palavras com os mesmos vizinhos acabam com vetores parecidos.
+    }
+\end{frame}
+
+%------------------------------------------------
+\section{O modelo Skip-gram}
+%------------------------------------------------
+
+\begin{frame}{Treino do Skip-gram e CBOW}
+    \centering
+    {\small\color{dexpiBlue}\textbf{Skip-gram}: a palavra do meio entra, o modelo adivinha o contexto}
+
+    \vspace{0.1cm}
+    \begin{tikzpicture}[
+        box/.style={draw=dexpiBlue, fill=dexpiBlueLight, rounded corners=2pt, align=center, font=\scriptsize, minimum height=0.8cm},
+        num/.style={circle, fill=dexpiBlue, text=white, font=\scriptsize\bfseries, inner sep=1.5pt},
+        arr/.style={-{Stealth}, thick, dexpiBlue}]
+        \node[draw=dexpiBlue, fill=dexpiBlue, text=white, rounded corners=2pt, font=\scriptsize\bfseries, minimum width=1.2cm, minimum height=0.6cm] (c) at (0,0) {loves};
+        \node[box, minimum width=1.6cm] (v) at (2.4,0) {vetor de\\centro $\vv$};
+        \node[box, minimum width=2.4cm] (s) at (5.4,0) {compara com\\\textbf{cada palavra}\\do vocabulário\\(escores)};
+        \node[box, fill=dexpiGreenLight, draw=dexpiGreenDark, minimum width=2.0cm] (p) at (8.6,0) {\textbf{softmax}\\probabilidades\\dos vizinhos};
+        \node[box, fill=dexpiLightBlue, minimum width=2.6cm] (r) at (11.9,0) {confere com os\\vizinhos \textbf{reais}:\\the, man, his, son};
+        \draw[arr] (c) -- (v);
+        \draw[arr] (v) -- (s);
+        \draw[arr] (s) -- (p);
+        \draw[arr] (p) -- (r);
+        \node[num] at ($(v.north)+(0,0.3)$) {1};
+        \node[num] at ($(s.north)+(0,0.3)$) {2};
+        \node[num] at ($(p.north)+(0,0.3)$) {3};
+        \node[num] at ($(r.north)+(0,0.3)$) {4};
+    \end{tikzpicture}
+
+    \vspace{0.5cm}
+    {\small\color{dexpiBlue}\textbf{CBOW}: o contexto entra, o modelo adivinha a palavra do meio}
+
+    \vspace{0.1cm}
+    \begin{tikzpicture}[
+        ctx/.style={draw=dexpiGreenDark, fill=dexpiGreenLight, rounded corners=2pt, minimum width=1.2cm, minimum height=0.5cm, font=\scriptsize},
+        box/.style={draw=dexpiBlue, fill=dexpiBlueLight, rounded corners=2pt, align=center, font=\scriptsize, minimum height=0.8cm},
+        num/.style={circle, fill=dexpiBlue, text=white, font=\scriptsize\bfseries, inner sep=1.5pt},
+        arr/.style={-{Stealth}, thick, dexpiBlue}]
+        % passo 1
+        \foreach \t [count=\i from 0] in {the, man, his, son} {
+            \node[ctx] (c\i) at (0, 0.9-\i*0.6) {\t};
+            \node[box, minimum height=0.5cm, right=0.4cm of c\i] (v\i) {vetor};
+            \draw[arr] (c\i) -- (v\i);
+        }
+        % passo 2
+        \node[box, fill=dexpiLightBlue, minimum width=2.0cm] (m) at (5.2,0) {\textbf{média}\\``resumo do\\contexto''};
+        \foreach \i in {0,...,3} { \draw[arr] (v\i.east) -- (m.west); }
+        % passo 3
+        \node[box, minimum width=2.4cm] (s) at (8.6,0) {compara com\\\textbf{cada palavra}\\do vocabulário\\(escores)};
+        \draw[arr] (m) -- (s);
+        % passo 4
+        \node[box, fill=dexpiGreenLight, draw=dexpiGreenDark, minimum width=2.2cm] (p) at (12.0,0) {\textbf{softmax}\\probabilidades\\$\Rightarrow$ ``loves''};
+        \draw[arr] (s) -- (p);
+        % números
+        \node[num] at (1.4,1.45) {1};
+        \node[num] at ($(m.north)+(0,0.3)$) {2};
+        \node[num] at ($(s.north)+(0,0.3)$) {3};
+        \node[num] at ($(p.north)+(0,0.3)$) {4};
+    \end{tikzpicture}
+\end{frame}
+
+
+\begin{frame}{A fórmula do skip-gram}
+    \begin{equation*}
+        P(\text{vizinho} \mid \text{centro}) =
+        \frac{\exp\left({\color{dexpiBlue}\uu_o}^\top {\color{dexpiGreenDark}\vv_c}\right)}
+             {{\color{dexpiRedDark}\sum_{i \in \V}} \exp\left(\uu_i^\top {\color{dexpiGreenDark}\vv_c}\right)}
+    \end{equation*}
+
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Lendo a fórmula}
+                \small
+                \begin{itemize}
+                    \item {\color{dexpiGreenDark}$\vv_c$}: vetor de centro (passo 1).
+                    \item {\color{dexpiBlue}$\uu_o$}: vetor da candidata a vizinha; o produto dá o escore (passo 2).
+                    \item {\color{dexpiRedDark}$\sum$}: soma sobre todas as palavras = softmax (passo 3).
+                \end{itemize}
+            \end{block}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Prévia do CBOW}
+                \small
+                O CBOW usará \textbf{esta mesma fórmula}, só trocando $\vv_c$ pela \textbf{média} dos vetores do contexto.
+            \end{block}
+        \end{column}
+    \end{columns}
+
+    \vspace{0.2cm}
+    \small
+    É uma classificação com $N$ classes: ``qual das $N$ palavras do vocabulário é a vizinha?''
+\end{frame}
+
+\begin{frame}{Função de Perda}
+    \small
+    \begin{itemize}\setlength{\itemsep}{0pt}
+        \item O modelo ajusta os vetores $\vv_i$ e $\uu_i$ de \textbf{todas} as palavras do vocabulário.
+        \item A meta: dar \textbf{alta probabilidade} aos vizinhos que de fato aparecem no texto (\destaque{máxima verossimilhança}).
+    \end{itemize}
+
+    \vspace{0.1cm}
+    {\centering
+    \begin{tikzpicture}[
+        passo/.style={line width=0.8pt, rounded corners=4pt,
+                      text width=0.28\textwidth, minimum height=2.3cm, align=center, inner sep=3pt},
+        seta/.style={-{Stealth[length=2.5mm]}, line width=1pt, dexpiBlueDark}]
+        \node[passo, draw=dexpiBlue, fill=dexpiBlue!10] (p1) {%
+            {\color{dexpiBlue}\large$\prod$\; \small\textbf{Passo 1: o produto}}\\[1pt]
+            \footnotesize$\prod_{t}\prod_{j} P\big(w^{(t+j)} \mid w^{(t)}\big)$\\[1pt]
+            \scriptsize Multiplica as probabilidades de \textbf{todos} os pares (centro $t$, vizinho $j$).\\[1pt]
+            {\color{dexpiBlue}\scriptsize\textbf{maximizar}}};
+        \node[passo, draw=dexpiGreenDark, fill=dexpiGreenDark!10, right=0.45cm of p1] (p2) {%
+            {\color{dexpiGreenDark}\large$\log$\; \small\textbf{Passo 2: o log}}\\[1pt]
+            \footnotesize$\sum_{t}\sum_{j} \log P\big(w^{(t+j)} \mid w^{(t)}\big)$\\[1pt]
+            \scriptsize Transforma multiplicação em \textbf{soma} e evita números minúsculos.\\[1pt]
+            {\color{dexpiGreenDark}\scriptsize\textbf{maximizar} (mesmo ótimo)}};
+        \node[passo, draw=dexpiRedDark, fill=dexpiRedDark!10, right=0.45cm of p2] (p3) {%
+            {\color{dexpiRedDark}\large$-$\; \small\textbf{Passo 3: o negativo}}\\[1pt]
+            \footnotesize$\mathcal{L} = -\sum_{t}\sum_{j} \log P\big(w^{(t+j)} \mid w^{(t)}\big)$\\[1pt]
+            \scriptsize ``Maximizar o acerto'' vira ``\textbf{minimizar o erro}'' (= entropia cruzada).\\[1pt]
+            {\color{dexpiRedDark}\scriptsize\textbf{minimizar}}};
+        \draw[seta] (p1) -- (p2);
+        \draw[seta] (p2) -- (p3);
+    \end{tikzpicture}\par}
+\end{frame}
+
+\begin{frame}{SGD e gradiente: observado menos esperado}
+    \footnotesize
+    A perda mede o erro; o \textbf{gradiente} diz \destaque{para que lado} empurrar cada vetor. Com bilhões de palavras, cada passo usa \textbf{um par} (centro, vizinho): $\vv \leftarrow \vv - \eta\,\nabla$ (\destaque{SGD}).
+
+    \vspace{-0.05cm}
+    {\centering
+    $\log P(w_o \mid w_c) =
+     \underbrace{{\color{dexpiBlue}\uu_o^\top \vv_c}}_{\text{nota do vizinho real}}
+     \;-\;
+     \underbrace{{\color{dexpiRedDark}\log\Big(\sum_{i \in \V} \exp(\uu_i^\top \vv_c)\Big)}}_{\text{soma sobre o vocabulário}}$
+    \par}
+
+    \vspace{-0.05cm}
+    {\centering
+    $\nabla_{\vv_c}\log P(w_o \mid w_c) =
+     \underbrace{{\color{dexpiBlue}\uu_o}}_{\text{observado}}
+     \;-\;
+     \underbrace{{\color{dexpiRedDark}\sum_{j \in \V} P(w_j \mid w_c)\,\uu_j}}_{\text{esperado pelo modelo}}$
+    \par}
+
+    \vspace{-0.1cm}
+    \begin{columns}[c]
+        \begin{column}{0.60\textwidth}
+            \scriptsize
+            \begin{itemize}\setlength{\itemsep}{1pt}
+                \item Duas regras de derivada: $\partial(\uu_o^\top \vv_c)/\partial \vv_c = \uu_o$ e $\partial \log\sum_i\exp(\uu_i^\top \vv_c)/\partial \vv_c = \sum_j P(w_j \mid w_c)\,\uu_j$.
+                \item Uma metade \textbf{premia} (a nota do vizinho real sobe), a outra \textbf{pune} (a soma penaliza qualquer nota alta).
+                \item Se o modelo já acerta, esperado $\approx$ observado e $\nabla \approx 0$.
+                \item A soma percorre as $N$ palavras a cada par: é o custo que a Seção 15.2 resolve.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.36\textwidth}
+            \centering
+            \begin{tikzpicture}[scale=1.1, font=\tiny]
+                \draw[gray!55, -{Stealth}] (-1.2,0) -- (1.3,0);
+                \draw[gray!55, -{Stealth}] (0,-0.45) -- (0,1.2);
+                \node[circle, fill=gray!55, inner sep=1.6pt] (man) at (0,1) {};
+                \node[left=3pt of man] {man};
+                \node[circle, fill=gray!55, inner sep=1.6pt] (the) at (-1,0) {};
+                \node[above=2pt of the] {the};
+                \node[circle, fill=dexpiBlue, inner sep=1.7pt] (son) at (1,0) {};
+                \node[below right=1pt and 1pt of son, text=dexpiBlue] {son};
+                \node[circle, draw=dexpiBlue, fill=white, inner sep=1.4pt] (esp) at (0.56,0.26) {};
+                \node[above left=2pt and 0pt of esp, text=dexpiBlue] {esperado};
+                \draw[-{Stealth}, very thick, dexpiBlue] (esp) -- (son);
+                \node[above right=0pt and 3pt of son, text=dexpiBlue] {$\nabla$};
+            \end{tikzpicture}
+        \end{column}
+    \end{columns}
+
+    \note{
+        A perda mede o erro, mas falta saber para que lado empurrar cada vetor. Isso é o gradiente. Com bilhões de palavras, não olhamos o corpus inteiro a cada passo: usamos um único par, centro e vizinho, e andamos contra o gradiente. Esse é o SGD, o gradiente descendente estocástico.
+        O log da probabilidade tem duas metades. A nota do vizinho real, em azul, quer subir. A soma sobre o vocabulário, em vermelho, pune qualquer nota alta, inclusive a das palavras erradas: uma metade premia, a outra pune.
+        Derivar isso usa só duas regras. A derivada do produto escalar em relação ao vetor de centro é o vetor do vizinho. A derivada do log da soma de exponenciais é a soma dos vetores de todas as palavras, ponderados pela probabilidade que o modelo dá a cada uma.
+        O resultado é elegante: observado menos esperado. Observado é o vetor do vizinho que de fato apareceu; esperado é a média dos vetores segundo o modelo. Se o modelo já acerta, os dois coincidem e o gradiente é próximo de zero. A figura mostra a seta que vai do que o modelo esperava até o vizinho que apareceu.
+        E o custo: a soma percorre as N palavras do vocabulário a cada par. É exatamente isso que a Seção 15.2 resolve.
+    }
+\end{frame}
+
+%------------------------------------------------
+\section{O modelo CBOW}
+%------------------------------------------------
+
+\begin{frame}{CBOW: a fórmula e o gradiente}
+    \footnotesize
+    \vspace{-0.1cm}
+    \begin{equation*}
+        P(\text{centro} \mid \text{contexto}) =
+        \frac{\exp\left({\color{dexpiBlue}\uu_c}^\top {\color{dexpiGreenDark}\bar{\vv}_o}\right)}
+             {{\color{dexpiRedDark}\sum_{i \in \V}} \exp\left(\uu_i^\top {\color{dexpiGreenDark}\bar{\vv}_o}\right)}
+        \qquad \text{com} \quad {\color{dexpiGreenDark}\bar{\vv}_o} = \frac{\vv_{o_1} + \cdots + \vv_{o_{2m}}}{2m}
+    \end{equation*}
+    \vspace{-0.45cm}
+    \begin{itemize}\setlength{\itemsep}{1pt}
+        \item {\color{dexpiGreenDark}$\bar{\vv}_o$}: resumo do contexto (passo 2); {\color{dexpiBlue}$\uu_c$}: vetor da candidata, o produto dá o escore (passo 3); {\color{dexpiRedDark}$\sum$}: softmax (passo 4).
+        \item Mesma fórmula do skip-gram, notação trocada: $\vv$ são as palavras de \textbf{contexto} (entrada) e $\uu_c$ é o \textbf{centro} previsto. A derivada também é a mesma; a novidade é derivar a média, $\partial \bar{\vv}_o / \partial \vv_{o_i} = \tfrac{1}{2m}$:
+    \end{itemize}
+    \vspace{-0.1cm}
+    {\centering
+    $\frac{\partial \log P(w_c \mid C)}{\partial \vv_{o_i}} =
+     \frac{1}{2m}\Big(
+     \underbrace{{\color{dexpiBlue}\uu_c}}_{\text{observado}} -
+     \underbrace{{\color{dexpiRedDark}\sum_{j \in \V} P(w_j \mid C)\,\uu_j}}_{\text{esperado pelo modelo}}\Big)$
+    \par}
+    \vspace{0.05cm}
+    \begin{exampleblock}{O que isso muda na prática}
+        \scriptsize
+        O ajuste chega \textbf{repartido} entre as $2m$ palavras do contexto: todas são puxadas na mesma direção, com um passo menor. Por isso o CBOW dilui palavras raras: elas aparecem pouco e sempre dentro de uma média.
+    \end{exampleblock}
+
+    \note{
+        O CBOW usa esta mesma fórmula do skip-gram, só trocando o vetor de centro pela média dos vetores do contexto. A leitura: a barra v é o resumo do contexto; o produto com o vetor da candidata dá o escore; e a soma sobre todas as palavras é a softmax. Aqui o v são as palavras de contexto, a entrada, e o u c é o centro previsto.
+        Como o log do CBOW é o do skip-gram trocando v c por v barra, a derivada também é a mesma: observado menos esperado. A novidade é derivar a média: cada palavra do contexto pesa um sobre dois m. Então o ajuste chega repartido entre as dois m palavras.
+        O que isso muda na prática: todas as palavras do contexto são puxadas na mesma direção, com um passo menor. É por isso que o CBOW dilui palavras raras: elas aparecem poucas vezes e sempre dentro de uma média.
+    }
+\end{frame}
+
